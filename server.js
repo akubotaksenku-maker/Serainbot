@@ -1,15 +1,17 @@
-const { randomBytes } = require("crypto");
-const express   = require("express");
-const { WebSocketServer } = require("ws");
-const http      = require("http");
-const path      = require("path");
-const fs        = require("fs");
-const os        = require("os");
-const readline  = require("readline");
-// UUID generator tanpa import randomUUID
-function randomUUID() {
-  return randomBytes(16).toString("hex").replace(/(.{8})(.{4})(.{4})(.{4})(.{12})/, "$1-$2-$3-$4-$5");
-}
+'use strict';
+
+// ─────────────────────────────────────────────
+//  BOT WA ADNAN — Server
+//  Express + WebSocket + Baileys
+// ─────────────────────────────────────────────
+
+const express  = require('express');
+const http     = require('http');
+const { WebSocketServer } = require('ws');
+const path     = require('path');
+const fs       = require('fs');
+const os       = require('os');
+const pino     = require('pino');
 
 const {
   default: makeWASocket,
@@ -17,145 +19,170 @@ const {
   DisconnectReason,
   fetchLatestBaileysVersion,
   makeCacheableSignalKeyStore,
-} = require("@whiskeysockets/baileys");
-const pino = require("pino");
+  Browsers,
+} = require('@whiskeysockets/baileys');
 
 // ── Config ────────────────────────────────────
-const PORT     = process.env.PORT || 3000;
-const PREFIX   = ".";
-const BOT_NAME = "Bot Adnan";
-const OWNER    = "Adnan";
+const PORT       = process.env.PORT || 3000;
+const PREFIX     = '.';
+const BOT_NAME   = 'Bot Adnan';
+const OWNER      = 'Adnan';
+const SESSION_DIR = path.join(__dirname, 'session');
 
-// ── Express + HTTP + WS ───────────────────────
+if (!fs.existsSync(SESSION_DIR)) fs.mkdirSync(SESSION_DIR, { recursive: true });
+
+// ── UUID tanpa crypto ─────────────────────────
+function uuid() {
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
+    const r = Math.random() * 16 | 0;
+    return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
+  });
+}
+
+// ── Logger ────────────────────────────────────
+const logger = pino({ level: 'silent' });
+
+// ── Express ───────────────────────────────────
 const app    = express();
 const server = http.createServer(app);
 const wss    = new WebSocketServer({ server });
 
-app.use(express.static(path.join(__dirname, "public")));
-app.get("/", (_, res) => res.sendFile(path.join(__dirname, "public", "index.html")));
+app.use(express.static(path.join(__dirname, 'public')));
+app.get('*', (_, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
 
-// ── State global ──────────────────────────────
-let sock       = null;
-let botReady   = false;
-let clients    = new Set(); // semua WS client yg konek
+// ── State ─────────────────────────────────────
+let sock     = null;
+let botReady = false;
+let clients  = new Set();
 
+// Game & RPG state
+const rpgData   = {};
+const guessGame = {};
+const tttGame   = {};
+
+// ── WS Helpers ────────────────────────────────
+function send(ws, data) {
+  try { if (ws.readyState === 1) ws.send(JSON.stringify(data)); } catch (_) {}
+}
 function broadcast(data) {
-  const msg = JSON.stringify(data);
-  clients.forEach(c => { if (c.readyState === 1) c.send(msg); });
+  clients.forEach(c => send(c, data));
 }
 
-function sendTo(ws, data) {
-  if (ws.readyState === 1) ws.send(JSON.stringify(data));
-}
-
-// ── WebSocket handler ─────────────────────────
-wss.on("connection", (ws) => {
+// ── WebSocket ─────────────────────────────────
+wss.on('connection', ws => {
   clients.add(ws);
-  console.log("[WS] Client konek. Total:", clients.size);
 
-  // Kirim status awal
-  sendTo(ws, { type: "status", botReady, msg: botReady ? "Bot sudah online!" : "Bot belum terhubung" });
+  // Kirim status saat client konek
+  send(ws, { type: 'status', botReady });
 
-  ws.on("message", async (raw) => {
+  ws.on('message', async raw => {
     let data;
     try { data = JSON.parse(raw); } catch { return; }
 
-    // Client minta pairing code
-    if (data.type === "requestCode") {
-      const nomor = String(data.nomor).replace(/\D/g, "");
+    if (data.type === 'requestCode') {
+      const nomor = String(data.nomor || '').replace(/\D/g, '');
       if (!nomor || nomor.length < 10) {
-        sendTo(ws, { type: "error", msg: "Nomor tidak valid!" });
+        send(ws, { type: 'error', msg: 'Nomor tidak valid!' });
         return;
       }
       await startBot(ws, nomor);
     }
-
-    // Client kirim perintah bot (untuk test di web)
-    if (data.type === "cmd" && botReady && sock) {
-      // simulasi perintah dari web → proses → kirim balik hasilnya
-      const result = await handleCmdWeb(data.cmd, data.args);
-      sendTo(ws, { type: "cmdResult", result });
-    }
   });
 
-  ws.on("close", () => {
-    clients.delete(ws);
-    console.log("[WS] Client disconnect. Sisa:", clients.size);
-  });
+  ws.on('close', () => clients.delete(ws));
+  ws.on('error', () => clients.delete(ws));
 });
 
-// ── Start Bot + Pairing Code ──────────────────
+// ── Start Bot ─────────────────────────────────
 async function startBot(ws, nomor) {
   try {
-    sendTo(ws, { type: "log", cls: "i", msg: "→ Inisialisasi Baileys..." });
+    // Kalau bot sudah jalan, disconnect dulu
+    if (sock) {
+      try { sock.end(); } catch (_) {}
+      sock = null;
+      botReady = false;
+    }
 
-    const sessionDir = path.join(__dirname, "session");
-    if (!fs.existsSync(sessionDir)) fs.mkdirSync(sessionDir, { recursive: true });
+    send(ws, { type: 'log', cls: 'i', msg: '→ Memuat session...' });
 
-    const { state, saveCreds } = await useMultiFileAuthState(sessionDir);
+    const { state, saveCreds } = await useMultiFileAuthState(SESSION_DIR);
     const { version } = await fetchLatestBaileysVersion();
 
-    sendTo(ws, { type: "log", cls: "s", msg: "✓ Modul Baileys loaded" });
-    sendTo(ws, { type: "progress", val: 30 });
+    send(ws, { type: 'log', cls: 's', msg: `✓ Baileys v${version.join('.')}` });
+    send(ws, { type: 'progress', val: 30 });
 
     sock = makeWASocket({
       version,
       auth: {
         creds: state.creds,
-        keys: makeCacheableSignalKeyStore(state.keys, pino({ level: "silent" })),
+        keys: makeCacheableSignalKeyStore(state.keys, logger),
       },
-      logger: pino({ level: "silent" }),
+      logger,
+      browser: Browsers.ubuntu('Chrome'),
       printQRInTerminal: false,
-      browser: [BOT_NAME, "Chrome", "1.0.0"],
+      markOnlineOnConnect: false,
+      generateHighQualityLinkPreview: false,
     });
 
-    sendTo(ws, { type: "log", cls: "s", msg: "✓ Socket dibuat" });
-    sendTo(ws, { type: "progress", val: 50 });
+    send(ws, { type: 'log', cls: 's', msg: '✓ Socket dibuat' });
+    send(ws, { type: 'progress', val: 50 });
 
-    // Request pairing code
+    // Minta pairing code
     if (!sock.authState.creds.registered) {
-      sendTo(ws, { type: "log", cls: "i", msg: `→ Request pairing code untuk +${nomor}...` });
-      sendTo(ws, { type: "progress", val: 70 });
+      send(ws, { type: 'log', cls: 'i', msg: `→ Request pairing code +${nomor}...` });
+      send(ws, { type: 'progress', val: 70 });
 
-      await new Promise(r => setTimeout(r, 1500));
+      // Tunggu socket siap dulu
+      await new Promise(r => setTimeout(r, 2000));
 
       try {
         const code = await sock.requestPairingCode(nomor);
-        sendTo(ws, { type: "progress", val: 100 });
-        sendTo(ws, { type: "log", cls: "s", msg: "✓ Kode berhasil didapat!" });
-        sendTo(ws, { type: "code", code }); // kirim kode ke web!
+        const formatted = code.match(/.{1,4}/g).join('-'); // format jadi XXXX-XXXX
+        send(ws, { type: 'progress', val: 100 });
+        send(ws, { type: 'log', cls: 's', msg: '✓ Kode berhasil didapat!' });
+        send(ws, { type: 'code', code: formatted });
       } catch (e) {
-        sendTo(ws, { type: "error", msg: "Gagal dapat kode: " + e.message });
+        send(ws, { type: 'error', msg: 'Gagal dapat kode: ' + e.message });
         return;
       }
     } else {
-      sendTo(ws, { type: "log", cls: "w", msg: "Session sudah ada, skip pairing..." });
-      sendTo(ws, { type: "progress", val: 100 });
+      send(ws, { type: 'log', cls: 'w', msg: 'Session sudah ada, skip pairing...' });
+      send(ws, { type: 'progress', val: 100 });
     }
 
-    // Event handlers
-    sock.ev.on("connection.update", ({ connection, lastDisconnect }) => {
-      if (connection === "open") {
+    // ── Event: connection ────────────────────
+    sock.ev.on('connection.update', ({ connection, lastDisconnect, qr }) => {
+      if (connection === 'open') {
         botReady = true;
-        console.log("[BOT] ✅ Terhubung ke WhatsApp!");
-        broadcast({ type: "connected", nomor: sock.user?.id });
-        broadcast({ type: "log", cls: "s", msg: "✅ BOT TERHUBUNG KE WHATSAPP!" });
+        const id = sock?.user?.id || '';
+        console.log('[BOT] Terhubung:', id);
+        broadcast({ type: 'connected', nomor: id.split(':')[0] });
+        broadcast({ type: 'log', cls: 's', msg: '✅ BOT TERHUBUNG KE WHATSAPP!' });
       }
-      if (connection === "close") {
+
+      if (connection === 'close') {
         botReady = false;
-        const shouldReconnect = lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
-        broadcast({ type: "disconnected" });
-        if (shouldReconnect) {
-          console.log("[BOT] Reconnecting...");
-          setTimeout(() => startBot(ws, nomor), 3000);
+        broadcast({ type: 'disconnected' });
+        const code = lastDisconnect?.error?.output?.statusCode;
+        const loggedOut = code === DisconnectReason.loggedOut;
+        console.log('[BOT] Putus, kode:', code);
+        if (!loggedOut) {
+          console.log('[BOT] Reconnecting...');
+          setTimeout(() => startBot(ws, nomor), 5000);
+        } else {
+          // Hapus session kalau logout
+          fs.rmSync(SESSION_DIR, { recursive: true, force: true });
+          fs.mkdirSync(SESSION_DIR, { recursive: true });
+          broadcast({ type: 'log', cls: 'e', msg: 'Sesi berakhir, silakan tautkan ulang.' });
         }
       }
     });
 
-    sock.ev.on("creds.update", saveCreds);
+    sock.ev.on('creds.update', saveCreds);
 
-    sock.ev.on("messages.upsert", async ({ messages, type }) => {
-      if (type !== "notify") return;
+    // ── Event: pesan masuk ───────────────────
+    sock.ev.on('messages.upsert', async ({ messages, type }) => {
+      if (type !== 'notify') return;
       for (const msg of messages) {
         if (msg.key.fromMe) continue;
         await handleMessage(msg);
@@ -163,112 +190,110 @@ async function startBot(ws, nomor) {
     });
 
   } catch (err) {
-    console.error("[ERROR startBot]", err);
-    sendTo(ws, { type: "error", msg: "Error: " + err.message });
+    console.error('[ERROR]', err);
+    send(ws, { type: 'error', msg: err.message });
   }
 }
 
-// ── Bot Logic (sama persis bot.js) ────────────
-const rpgData  = {};
-const guessGame = {};
-const tttGame  = {};
-
+// ── Bot Logic ─────────────────────────────────
 function getRpg(jid) {
   if (!rpgData[jid]) rpgData[jid] = { hp: 100, mp: 80, xp: 0, lvl: 1, kills: 0, gold: 0 };
   return rpgData[jid];
 }
 
-function renderTTT(jid) {
-  const g = tttGame[jid];
-  const s = g.board.map((v, i) => v === "X" ? "❌" : v === "O" ? "⭕" : String(i + 1));
-  return `*TIC-TAC-TOE*\n\n${s[0]} │ ${s[1]} │ ${s[2]}\n──┼───┼──\n${s[3]} │ ${s[4]} │ ${s[5]}\n──┼───┼──\n${s[6]} │ ${s[7]} │ ${s[8]}`;
+function boardStr(board) {
+  const s = board.map((v, i) => v === 'X' ? '❌' : v === 'O' ? '⭕' : String(i + 1));
+  return `${s[0]} │ ${s[1]} │ ${s[2]}\n──┼───┼──\n${s[3]} │ ${s[4]} │ ${s[5]}\n──┼───┼──\n${s[6]} │ ${s[7]} │ ${s[8]}`;
 }
-function checkTTT(b, p) {
+
+function checkWin(b, p) {
   return [[0,1,2],[3,4,5],[6,7,8],[0,3,6],[1,4,7],[2,5,8],[0,4,8],[2,4,6]]
-    .some(([a, bb, c]) => b[a] === p && b[bb] === p && b[c] === p);
+    .some(([a,b2,c]) => b[a]===p && b[b2]===p && b[c]===p);
+}
+
+async function reply(jid, text) {
+  if (!sock || !botReady) return;
+  try {
+    await sock.sendPresenceUpdate('composing', jid);
+    await new Promise(r => setTimeout(r, 500));
+    await sock.sendMessage(jid, { text });
+    broadcast({ type: 'activity', jid, cmd: text.split('\n')[0].slice(0, 30) });
+  } catch (e) {
+    console.error('[REPLY ERROR]', e.message);
+  }
+}
+
+async function replyBtn(jid, text, footer, buttons) {
+  if (!sock || !botReady) return;
+  try {
+    await sock.sendPresenceUpdate('composing', jid);
+    await new Promise(r => setTimeout(r, 500));
+    await sock.sendMessage(jid, { text, footer, buttons, headerType: 1 });
+    broadcast({ type: 'activity', jid, cmd: text.split('\n')[0].slice(0, 30) });
+  } catch {
+    // Fallback ke text biasa kalau button gagal
+    await sock.sendMessage(jid, { text });
+  }
 }
 
 async function handleMessage(msg) {
   try {
     const jid  = msg.key.remoteJid;
-    const body = msg.message?.conversation || msg.message?.extendedTextMessage?.text || "";
+    const body =
+      msg.message?.conversation ||
+      msg.message?.extendedTextMessage?.text ||
+      msg.message?.imageMessage?.caption || '';
+
     if (!body.startsWith(PREFIX)) return;
 
     const args = body.slice(PREFIX.length).trim().split(/\s+/);
     const cmd  = args.shift().toLowerCase();
-    const text = args.join(" ");
+    const text = args.join(' ');
 
-    console.log(`[CMD] .${cmd} dari ${jid}`);
+    console.log(`[CMD] .${cmd} | ${jid}`);
 
-    await sock.sendPresenceUpdate("composing", jid);
-    await new Promise(r => setTimeout(r, 600));
+    const now  = new Date();
+    const jam  = now.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' });
+    const tgl  = now.toLocaleDateString('id-ID', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
 
-    // Broadcast ke web bahwa ada pesan masuk
-    broadcast({ type: "activity", jid, cmd: "." + cmd });
-
-    const now = new Date();
-    const jam = now.toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" });
-    const tgl = now.toLocaleDateString("id-ID", { weekday: "long", year: "numeric", month: "long", day: "numeric" });
-    const hari = now.toLocaleDateString("id-ID", { weekday: "long" });
-
-    // ─── MENU ────────────────────────────────────
-    if (cmd === "menu" || cmd === "help") {
-      const menu =
+    // ── MENU ──────────────────────────────────
+    if (cmd === 'menu' || cmd === 'help') {
+      await replyBtn(jid,
 `✧₊˚
-[ ✦ ${BOT_NAME.toUpperCase()} ]
-Ohayou gozaimasu!
-Semoga harimu menyenangkan! (✿◡‿◡)
-✧₊˚
-
-┌─[ ✦ PROFIL PENGGUNA ]
-│ ◇ Nama : ${OWNER}
-│ ◇ Role : Free user
-│ ◇ Limit : 30/30
-└──────────────────
+┌─[ ✦ ${BOT_NAME.toUpperCase()} ]
+│ Ohayou gozaimasu!
+│ Semoga harimu menyenangkan! (✿◡‿◡)
+└────────────────────
 ✧₊˚
 
 ┌─[ ✦ INFO SISTEM ]
-│ ◇ Bot : ${BOT_NAME}
-│ ◇ Versi : 1.0.0
+│ ◇ Bot     : ${BOT_NAME}
+│ ◇ Versi   : 1.0.0
 │ ◇ Creator : ${OWNER}
-│ ◇ Mode : Public
-└──────────────────
+│ ◇ Mode    : Public
+└────────────────────
 ✧₊˚
 
 ┌─[ ✦ WAKTU & TANGGAL ]
 │ ◇ Tanggal : ${tgl}
-│ ◇ Hari : ${hari}
-│ ◇ Jam : ${jam} WIB
-└──────────────────
+│ ◇ Jam     : ${jam} WIB
+└────────────────────
 ✧₊˚
 
-_Ketik .help <cmd> untuk info detail._
-${BOT_NAME} • Versi 1.0.0`;
-
-      await sock.sendMessage(jid, {
-        text: menu,
-        footer: BOT_NAME + " • Versi 1.0.0",
-        buttons: [
-          { buttonId: ".menuall",  buttonText: { displayText: "📋 Semua Menu" },  type: 1 },
-          { buttonId: ".menugame", buttonText: { displayText: "🎮 Game Menu" },   type: 1 },
-          { buttonId: ".menurpg",  buttonText: { displayText: "⚔️ RPG Menu" },    type: 1 },
-        ],
-        headerType: 1
-      });
+_Ketik nama menu untuk buka kategori_
+${BOT_NAME} • v1.0.0`,
+        BOT_NAME + ' • v1.0.0',
+        [
+          { buttonId: '.menuall',  buttonText: { displayText: '📋 Semua Menu' },  type: 1 },
+          { buttonId: '.menugame', buttonText: { displayText: '🎮 Game' },         type: 1 },
+          { buttonId: '.menurpg',  buttonText: { displayText: '⚔️ RPG' },          type: 1 },
+        ]
+      );
     }
 
-    else if (cmd === "tautkan" || cmd === "link") {
-      const webUrl = process.env.WEB_URL || "https://bot-adnan.up.railway.app";
-      await sock.sendMessage(jid, {
-        text: `🔗 *Tautkan Bot WA Adnan*\n\nBuka link berikut untuk menautkan nomor WA ke bot:\n\n${webUrl}\n\n_Masukkan nomormu → dapat kode → paste ke WA_`,
-        footer: BOT_NAME,
-        buttons: [{ buttonId: "open", buttonText: { displayText: "🌐 Buka Web Tautkan" }, type: 1 }],
-        headerType: 1
-      });
-    }
-
-    else if (cmd === "menuall") {
-      const msg =
+    // ── SEMUA MENU ────────────────────────────
+    else if (cmd === 'menuall') {
+      await replyBtn(jid,
 `📋 *[ SEMUA MENU — ${BOT_NAME} ]*
 
 ◈ .menuall       — Semua perintah
@@ -276,224 +301,324 @@ ${BOT_NAME} • Versi 1.0.0`;
 ◈ .menurpg       — Sistem RPG
 ◈ .menuminigame  — Mini Game lanjut
 ◈ .menujodoh     — Jodoh & Sosial
-◈ .menutiktok    — TikTok Fitur
-◈ .menuyoutube   — YouTube Fitur
+◈ .menutiktok    — TikTok
+◈ .menuyoutube   — YouTube
 ◈ .menudownloder — Downloader
-◈ .menugrup      — Fitur Grup`;
-      await sock.sendMessage(jid, {
-        text: msg, footer: BOT_NAME,
-        buttons: [
-          { buttonId: ".menugame",      buttonText: { displayText: "🎮 Game" },       type: 1 },
-          { buttonId: ".menurpg",       buttonText: { displayText: "⚔️ RPG" },        type: 1 },
-          { buttonId: ".menudownloder", buttonText: { displayText: "⬇️ Downloader" }, type: 1 },
-        ], headerType: 1
-      });
+◈ .menugrup      — Fitur Grup`,
+        BOT_NAME,
+        [
+          { buttonId: '.menugame',      buttonText: { displayText: '🎮 Game' },       type: 1 },
+          { buttonId: '.menurpg',       buttonText: { displayText: '⚔️ RPG' },        type: 1 },
+          { buttonId: '.menudownloder', buttonText: { displayText: '⬇️ Downloader' }, type: 1 },
+        ]
+      );
     }
 
-    else if (cmd === "menugame") {
-      await sock.sendMessage(jid, {
-        text: `🎮 *[ MENU GAME ]*\n\n◈ .ttt — Tic-Tac-Toe\n◈ .tebak — Tebak angka\n◈ .suit [batu/gunting/kertas]\n◈ .kuro — Kuro Slash Game`,
-        footer: BOT_NAME,
-        buttons: [
-          { buttonId: ".ttt",   buttonText: { displayText: "🎮 TTT" },   type: 1 },
-          { buttonId: ".tebak", buttonText: { displayText: "🔢 Tebak" }, type: 1 },
-          { buttonId: ".kuro",  buttonText: { displayText: "🌑 Kuro" },  type: 1 },
-        ], headerType: 1
-      });
+    // ── MENU GAME ─────────────────────────────
+    else if (cmd === 'menugame') {
+      await replyBtn(jid,
+`🎮 *[ MENU GAME ]*
+
+◈ .ttt           — Tic-Tac-Toe
+◈ .pilih [1-9]   — Pilih kotak TTT
+◈ .tebak         — Tebak angka 1-100
+◈ .jawab [angka] — Jawab tebakan
+◈ .suit [pilihan]— Suit vs Bot`,
+        BOT_NAME,
+        [
+          { buttonId: '.ttt',        buttonText: { displayText: '🎮 TTT' },   type: 1 },
+          { buttonId: '.tebak',      buttonText: { displayText: '🔢 Tebak' }, type: 1 },
+          { buttonId: '.suit batu',  buttonText: { displayText: '✊ Suit' },  type: 1 },
+        ]
+      );
     }
 
-    else if (cmd === "menurpg") {
+    // ── MENU RPG ──────────────────────────────
+    else if (cmd === 'menurpg') {
       const r = getRpg(jid);
-      await sock.sendMessage(jid, {
-        text: `⚔️ *[ MENU RPG ]*\n\n◈ .rpg — Status karakter\n◈ .serang — Serang musuh\n◈ .sihir — Pakai sihir\n◈ .sembuh — Pulihkan HP/MP\n◈ .jelajah — Jelajah dunia\n◈ .top — Leaderboard\n\n📊 Kamu: Lvl ${r.lvl} | HP ${r.hp} | Gold ${r.gold}`,
-        footer: BOT_NAME,
-        buttons: [
-          { buttonId: ".serang",  buttonText: { displayText: "⚔️ Serang" },  type: 1 },
-          { buttonId: ".sembuh",  buttonText: { displayText: "💊 Sembuh" },  type: 1 },
-          { buttonId: ".jelajah", buttonText: { displayText: "🗺️ Jelajah" }, type: 1 },
-        ], headerType: 1
-      });
+      await replyBtn(jid,
+`⚔️ *[ MENU RPG ]*
+
+◈ .rpg     — Status karakter
+◈ .serang  — Serang musuh (+XP)
+◈ .sihir   — Pakai sihir (-15 MP)
+◈ .sembuh  — Pulihkan HP & MP
+◈ .jelajah — Jelajah & reward
+◈ .top     — Leaderboard
+
+📊 Kamu: Lvl ${r.lvl} | HP ${r.hp} | Gold ${r.gold}`,
+        BOT_NAME,
+        [
+          { buttonId: '.serang',  buttonText: { displayText: '⚔️ Serang' },  type: 1 },
+          { buttonId: '.sembuh',  buttonText: { displayText: '💊 Sembuh' },  type: 1 },
+          { buttonId: '.jelajah', buttonText: { displayText: '🗺️ Jelajah' }, type: 1 },
+        ]
+      );
     }
 
-    else if (cmd === "menuminigame") {
-      await sock.sendMessage(jid, { text: `🕹️ *[ MINI GAME ]*\n\n◈ .ttt\n◈ .tebak\n◈ .suit\n◈ .kuro\n◈ .quiz\n◈ .trivia`, footer: BOT_NAME, buttons: [{ buttonId: ".kuro", buttonText: { displayText: "🌑 Kuro Slash" }, type: 1 }], headerType: 1 });
-    }
-    else if (cmd === "menujodoh") {
-      await sock.sendMessage(jid, { text: `💘 *[ JODOH & SOSIAL ]*\n\n◈ .jodoh\n◈ .ship\n◈ .rate\n◈ .zodiak`, footer: BOT_NAME, buttons: [{ buttonId: ".jodoh", buttonText: { displayText: "💘 Cari Jodoh" }, type: 1 }], headerType: 1 });
-    }
-    else if (cmd === "menutiktok") {
-      await sock.sendMessage(jid, { text: `🎵 *[ TIKTOK ]*\n\n◈ .tiktok [kata]\n◈ .ttdown [link]\n◈ .tttrend`, footer: BOT_NAME, buttons: [{ buttonId: ".tttrend", buttonText: { displayText: "🔥 Trending" }, type: 1 }], headerType: 1 });
-    }
-    else if (cmd === "menuyoutube") {
-      await sock.sendMessage(jid, { text: `▶️ *[ YOUTUBE ]*\n\n◈ .ytsearch [q]\n◈ .ytmp3 [link]\n◈ .ytdown [link]`, footer: BOT_NAME, buttons: [{ buttonId: ".ytsearch", buttonText: { displayText: "🔍 Cari" }, type: 1 }], headerType: 1 });
-    }
-    else if (cmd === "menudownloder") {
-      await sock.sendMessage(jid, { text: `⬇️ *[ DOWNLOADER ]*\n\n◈ .ttdown [link]\n◈ .ytdown [link]\n◈ .igdown [link]\n◈ .fbdown [link]\n◈ .twdown [link]`, footer: BOT_NAME, buttons: [{ buttonId: ".ttdown", buttonText: { displayText: "🎵 TikTok" }, type: 1 }], headerType: 1 });
-    }
-    else if (cmd === "menugrup") {
-      await sock.sendMessage(jid, { text: `👥 *[ GRUP ]*\n\n◈ .hidetag\n◈ .tagall\n◈ .kick\n◈ .add\n◈ .promote\n◈ .demote\n◈ .antilink\n◈ .welcome`, footer: BOT_NAME, buttons: [{ buttonId: ".hidetag", buttonText: { displayText: "📢 Hidetag" }, type: 1 }], headerType: 1 });
+    // ── MENU MINIGAME ─────────────────────────
+    else if (cmd === 'menuminigame') {
+      await replyBtn(jid, `🕹️ *[ MINI GAME ]*\n\n◈ .ttt\n◈ .tebak\n◈ .suit\n◈ .quiz\n◈ .trivia`, BOT_NAME,
+        [{ buttonId: '.ttt', buttonText: { displayText: '🎮 Main TTT' }, type: 1 }]);
     }
 
-    // ─── PING ─────────────────────────────────
-    else if (cmd === "ping") {
-      const up = Math.floor(process.uptime());
-      const h = Math.floor(up/3600), m = Math.floor((up%3600)/60), s = up%60;
+    // ── MENU JODOH ────────────────────────────
+    else if (cmd === 'menujodoh') {
+      await replyBtn(jid, `💘 *[ JODOH & SOSIAL ]*\n\n◈ .jodoh\n◈ .ship\n◈ .rate\n◈ .zodiak`, BOT_NAME,
+        [{ buttonId: '.jodoh', buttonText: { displayText: '💘 Cari Jodoh' }, type: 1 }]);
+    }
+
+    // ── MENU TIKTOK ───────────────────────────
+    else if (cmd === 'menutiktok') {
+      await replyBtn(jid, `🎵 *[ TIKTOK ]*\n\n◈ .tiktok [kata]\n◈ .ttdown [link]\n◈ .tttrend`, BOT_NAME,
+        [{ buttonId: '.tttrend', buttonText: { displayText: '🔥 Trending' }, type: 1 }]);
+    }
+
+    // ── MENU YOUTUBE ──────────────────────────
+    else if (cmd === 'menuyoutube') {
+      await replyBtn(jid, `▶️ *[ YOUTUBE ]*\n\n◈ .ytsearch [q]\n◈ .ytmp3 [link]\n◈ .ytdown [link]`, BOT_NAME,
+        [{ buttonId: '.ytsearch', buttonText: { displayText: '🔍 Cari' }, type: 1 }]);
+    }
+
+    // ── MENU DOWNLOADER ───────────────────────
+    else if (cmd === 'menudownloder') {
+      await replyBtn(jid, `⬇️ *[ DOWNLOADER ]*\n\n◈ .ttdown [link]\n◈ .ytdown [link]\n◈ .igdown [link]\n◈ .fbdown [link]\n◈ .twdown [link]`, BOT_NAME,
+        [{ buttonId: '.ttdown', buttonText: { displayText: '🎵 TikTok' }, type: 1 }]);
+    }
+
+    // ── MENU GRUP ─────────────────────────────
+    else if (cmd === 'menugrup') {
+      await replyBtn(jid, `👥 *[ GRUP ]*\n\n◈ .hidetag\n◈ .tagall\n◈ .kick\n◈ .add\n◈ .promote\n◈ .demote\n◈ .antilink\n◈ .welcome\n\n_⚠ Butuh admin bot_`, BOT_NAME,
+        [{ buttonId: '.hidetag', buttonText: { displayText: '📢 Hidetag' }, type: 1 }]);
+    }
+
+    // ── PING ──────────────────────────────────
+    else if (cmd === 'ping') {
+      const up  = Math.floor(process.uptime());
+      const h   = Math.floor(up / 3600);
+      const m   = Math.floor((up % 3600) / 60);
+      const s   = up % 60;
       const mem = process.memoryUsage();
-      const total = os.totalmem(), free = os.freemem();
-      const ramPct = (((total-free)/total)*100).toFixed(1);
-      const ms = Math.floor(Math.random()*200+50);
-      await sock.sendMessage(jid, { text:
+      const tot = os.totalmem(), free = os.freemem();
+      const ram = (((tot - free) / tot) * 100).toFixed(1);
+      const ms  = Date.now() % 500 + 50;
+      await reply(jid,
 `📡 *SERVER LIVE*
 ● REALTIME MONITOR · ${ms} ms
 
 ⏱️ *BOT UPTIME*
 ${h}j ${m}m ${s}s
 
-💾 *RAM* ${ramPct}%
-${"█".repeat(Math.round(ramPct/10))}${"░".repeat(10-Math.round(ramPct/10))}
-${((total-free)/1024/1024).toFixed(0)} MB / ${(total/1024/1024).toFixed(0)} MB
+💾 *RAM* ${ram}%
+${'█'.repeat(Math.round(ram / 10))}${'░'.repeat(10 - Math.round(ram / 10))}
+${((tot - free) / 1024 / 1024).toFixed(0)} MB / ${(tot / 1024 / 1024).toFixed(0)} MB
 
-🧠 *HEAP / RSS*
-${(mem.heapUsed/1024/1024).toFixed(1)} MB / ${(mem.rss/1024/1024).toFixed(1)} MB
-
+🧠 HEAP: ${(mem.heapUsed / 1024 / 1024).toFixed(1)} MB
 🖥️ CPU: ${os.cpus().length} core
-⚙️ OS: ${os.platform()} ${os.arch()}
+⚙️ ${os.platform()} ${os.arch()}
 🚀 Node ${process.version}
 
-_by ${BOT_NAME}_`
-      });
+_by ${BOT_NAME}_`);
     }
 
-    // ─── BRAT ─────────────────────────────────
-    else if (cmd === "brat" || cmd === "sticker") {
-      if (!text) { await sock.sendMessage(jid, { text: `❌ Contoh: ${PREFIX}brat halo` }); return; }
-      await sock.sendMessage(jid, { text: `🖼️ BRAT STICKER\n\n┌─────────────────┐\n│  ${text}  │\n│   by Adnan      │\n└─────────────────┘` });
+    // ── TAUTKAN ───────────────────────────────
+    else if (cmd === 'tautkan' || cmd === 'link') {
+      const url = process.env.WEB_URL || 'https://bot-adnan.up.railway.app';
+      await replyBtn(jid,
+`🔗 *Tautkan Bot WA Adnan*
+
+Buka link berikut untuk menautkan nomor WA ke bot:
+
+${url}
+
+_Masukkan nomormu → dapat kode → paste ke WA_`,
+        BOT_NAME,
+        [{ buttonId: 'open', buttonText: { displayText: '🌐 Buka Web Tautkan' }, type: 1 }]
+      );
     }
 
-    // ─── TTT ──────────────────────────────────
-    else if (cmd === "ttt") {
-      tttGame[jid] = { board: Array(9).fill(null), turn: "X", over: false };
-      await sock.sendMessage(jid, { text: renderTTT(jid) + "\n\nGiliran: ❌\nKetik: .pilih [1-9]" });
+    // ── BRAT ──────────────────────────────────
+    else if (cmd === 'brat' || cmd === 'sticker') {
+      if (!text) { await reply(jid, `❌ Contoh: ${PREFIX}brat halo`); return; }
+      await reply(jid,
+`🖼️ *BRAT STICKER*
+
+┌─────────────────────┐
+│                     │
+│   *${text}*   │
+│                     │
+│      _by Adnan_     │
+└─────────────────────┘`);
     }
-    else if (cmd === "pilih") {
+
+    // ── TTT ───────────────────────────────────
+    else if (cmd === 'ttt') {
+      tttGame[jid] = { board: Array(9).fill(null), turn: 'X', over: false };
+      await reply(jid, `*TIC-TAC-TOE*\n\n${boardStr(tttGame[jid].board)}\n\nGiliran: ❌\nKetik: .pilih [1-9]`);
+    }
+
+    else if (cmd === 'pilih') {
       const g = tttGame[jid];
-      if (!g) { await sock.sendMessage(jid, { text: "❌ Mulai dulu: .ttt" }); return; }
+      if (!g) { await reply(jid, '❌ Mulai dulu: .ttt'); return; }
+      if (g.over) { await reply(jid, 'Game selesai! Ketik .ttt untuk main lagi.'); return; }
       const idx = parseInt(text) - 1;
-      if (isNaN(idx)||idx<0||idx>8||g.board[idx]) { await sock.sendMessage(jid, { text: "❌ Pilihan tidak valid!" }); return; }
+      if (isNaN(idx) || idx < 0 || idx > 8) { await reply(jid, '❌ Pilih angka 1-9'); return; }
+      if (g.board[idx]) { await reply(jid, '❌ Kotak sudah terisi!'); return; }
       g.board[idx] = g.turn;
-      const won = checkTTT(g.board, g.turn);
+      const won  = checkWin(g.board, g.turn);
       const full = g.board.every(Boolean);
-      let result = renderTTT(jid);
-      if (won) { result += `\n\n🎉 ${g.turn==="X"?"❌":"⭕"} Menang!`; g.over = true; }
-      else if (full) { result += "\n\n🤝 Seri!"; g.over = true; }
-      else { g.turn = g.turn==="X"?"O":"X"; result += `\n\nGiliran: ${g.turn==="X"?"❌":"⭕"}`; }
-      await sock.sendMessage(jid, { text: result });
+      let out = `*TIC-TAC-TOE*\n\n${boardStr(g.board)}\n\n`;
+      if (won)       { out += `🎉 ${g.turn === 'X' ? '❌' : '⭕'} Menang!`; g.over = true; }
+      else if (full) { out += '🤝 Seri!'; g.over = true; }
+      else           { g.turn = g.turn === 'X' ? 'O' : 'X'; out += `Giliran: ${g.turn === 'X' ? '❌' : '⭕'}`; }
+      await reply(jid, out);
     }
 
-    // ─── TEBAK ────────────────────────────────
-    else if (cmd === "tebak") {
-      guessGame[jid] = { angka: Math.floor(Math.random()*100)+1, sisa: 7 };
-      await sock.sendMessage(jid, { text: "🔢 Tebak angka 1–100!\nKamu punya 7 kesempatan!\nKetik: .jawab [angka]" });
+    // ── TEBAK ANGKA ───────────────────────────
+    else if (cmd === 'tebak') {
+      guessGame[jid] = { angka: Math.floor(Math.random() * 100) + 1, sisa: 7 };
+      await reply(jid, '🔢 *Tebak Angka!*\n\nAku pikir angka 1–100.\nKamu punya 7 kesempatan!\n\nKetik: .jawab [angka]');
     }
-    else if (cmd === "jawab") {
+
+    else if (cmd === 'jawab') {
       const g = guessGame[jid];
-      if (!g) { await sock.sendMessage(jid, { text: "❌ Mulai dulu: .tebak" }); return; }
-      const n = parseInt(text); g.sisa--;
-      if (n === g.angka) { await sock.sendMessage(jid, { text: `🎉 Benar! Angkanya ${g.angka}!` }); delete guessGame[jid]; }
-      else if (g.sisa===0) { await sock.sendMessage(jid, { text: `😢 Habis! Jawaban: ${g.angka}` }); delete guessGame[jid]; }
-      else { await sock.sendMessage(jid, { text: `${n<g.angka?"⬆️ Terlalu kecil":"⬇️ Terlalu besar"}! Sisa: ${g.sisa}` }); }
+      if (!g) { await reply(jid, '❌ Mulai dulu: .tebak'); return; }
+      const n = parseInt(text);
+      if (isNaN(n)) { await reply(jid, '❌ Masukkan angka!'); return; }
+      g.sisa--;
+      if (n === g.angka) {
+        await reply(jid, `🎉 Benar! Angkanya ${g.angka}!\nMain lagi? .tebak`);
+        delete guessGame[jid];
+      } else if (g.sisa === 0) {
+        await reply(jid, `😢 Habis! Jawaban: *${g.angka}*\nMain lagi? .tebak`);
+        delete guessGame[jid];
+      } else {
+        await reply(jid, `${n < g.angka ? '⬆️ Terlalu kecil' : '⬇️ Terlalu besar'}!\nSisa: ${g.sisa} kesempatan`);
+      }
     }
 
-    // ─── SUIT ─────────────────────────────────
-    else if (cmd === "suit") {
-      const pl = ["batu","gunting","kertas"];
-      if (!pl.includes(text.toLowerCase())) { await sock.sendMessage(jid, { text: "❌ .suit batu/gunting/kertas" }); return; }
-      const bot = pl[Math.floor(Math.random()*3)]; const u = text.toLowerCase();
-      let h = "🤝 Seri!";
-      if ((u==="batu"&&bot==="gunting")||(u==="gunting"&&bot==="kertas")||(u==="kertas"&&bot==="batu")) h = "🎉 Kamu Menang!";
-      else if (u!==bot) h = "😢 Kamu Kalah!";
-      const em = {batu:"🪨",gunting:"✂️",kertas:"📄"};
-      await sock.sendMessage(jid, { text: `✊ SUIT!\n\nKamu: ${em[u]} ${u}\nBot: ${em[bot]} ${bot}\n\n${h}` });
+    // ── SUIT ──────────────────────────────────
+    else if (cmd === 'suit') {
+      const opts = ['batu', 'gunting', 'kertas'];
+      if (!opts.includes(text.toLowerCase())) { await reply(jid, '❌ .suit batu / gunting / kertas'); return; }
+      const bot = opts[Math.floor(Math.random() * 3)];
+      const u   = text.toLowerCase();
+      let hasil = '🤝 Seri!';
+      if ((u==='batu'&&bot==='gunting')||(u==='gunting'&&bot==='kertas')||(u==='kertas'&&bot==='batu')) hasil = '🎉 Kamu Menang!';
+      else if (u !== bot) hasil = '😢 Kamu Kalah!';
+      const em = { batu: '🪨', gunting: '✂️', kertas: '📄' };
+      await reply(jid, `✊ *SUIT!*\n\nKamu: ${em[u]} ${u}\nBot: ${em[bot]} ${bot}\n\n${hasil}`);
     }
 
-    // ─── RPG ──────────────────────────────────
-    else if (cmd === "rpg") {
+    // ── RPG ───────────────────────────────────
+    else if (cmd === 'rpg') {
       const r = getRpg(jid);
-      await sock.sendMessage(jid, { text: `⚔️ *RPG — ${OWNER}*\n\nLevel: ${r.lvl}\nHP: ${r.hp}/100 ❤️\nMP: ${r.mp}/80 💙\nXP: ${r.xp} ⭐\nGold: ${r.gold} 🪙\nKills: ${r.kills} 💀` });
+      await reply(jid,
+`⚔️ *RPG — ${OWNER}*
+
+Level : ${r.lvl}
+HP    : ${r.hp}/100 ❤️
+MP    : ${r.mp}/80 💙
+XP    : ${r.xp} ⭐
+Gold  : ${r.gold} 🪙
+Kills : ${r.kills} 💀
+
+.serang | .sihir | .sembuh | .jelajah`);
     }
-    else if (cmd === "serang") {
-      const r = getRpg(jid); const dmg=Math.floor(Math.random()*20)+10; const balik=Math.floor(Math.random()*10); const xp=Math.floor(Math.random()*30)+10;
-      r.hp=Math.max(0,r.hp-balik); r.xp+=xp; r.kills++; r.gold+=Math.floor(Math.random()*20)+5;
-      if(r.xp>=r.lvl*100){r.xp=0;r.lvl++;}
-      await sock.sendMessage(jid, { text: `⚔️ DMG: ${dmg} | Balik: -${balik} HP | +${xp} XP\nHP: ${r.hp}/100` });
-    }
-    else if (cmd === "sihir") {
+
+    else if (cmd === 'serang') {
       const r = getRpg(jid);
-      if(r.mp<15){ await sock.sendMessage(jid, { text: "❌ MP kurang! Pakai .sembuh" }); return; }
-      const dmg=Math.floor(Math.random()*40)+20; r.mp-=15; r.xp+=40; r.kills++;
-      if(r.xp>=r.lvl*100){r.xp=0;r.lvl++;}
-      await sock.sendMessage(jid, { text: `✨ Fireball! DMG: ${dmg} 🔥\nMP -15 | HP: ${r.hp}/100 | MP: ${r.mp}/80` });
+      const dmg  = Math.floor(Math.random() * 20) + 10;
+      const balik = Math.floor(Math.random() * 10);
+      const xpGet = Math.floor(Math.random() * 30) + 10;
+      r.hp   = Math.max(0, r.hp - balik);
+      r.xp  += xpGet;
+      r.kills++;
+      r.gold += Math.floor(Math.random() * 20) + 5;
+      if (r.xp >= r.lvl * 100) { r.xp = 0; r.lvl++; }
+      await reply(jid, `⚔️ Serang!\n\nDMG ke musuh : ${dmg}\nBalasan      : -${balik} HP\nXP didapat   : +${xpGet}\n\nHP: ${r.hp}/100 | Gold: ${r.gold}`);
     }
-    else if (cmd === "sembuh") {
-      const r = getRpg(jid); const heal=Math.floor(Math.random()*30)+20;
-      r.hp=Math.min(100,r.hp+heal); r.mp=Math.min(80,r.mp+20);
-      await sock.sendMessage(jid, { text: `💊 +${heal} HP | +20 MP\nHP: ${r.hp}/100 | MP: ${r.mp}/80` });
-    }
-    else if (cmd === "jelajah") {
+
+    else if (cmd === 'sihir') {
       const r = getRpg(jid);
-      const evs=["🗺️ Harta karun! +50 Gold","👺 Goblin! +30 XP","🌿 Istirahat +15 HP","💎 Permata! +100 Gold","☠️ Jebakan! -10 HP"];
-      const ev=evs[Math.floor(Math.random()*evs.length)];
-      if(ev.includes("Gold"))r.gold+=ev.includes("100")?100:50;
-      if(ev.includes("XP"))r.xp+=30;
-      if(ev.includes("+15 HP"))r.hp=Math.min(100,r.hp+15);
-      if(ev.includes("-10 HP"))r.hp=Math.max(0,r.hp-10);
-      await sock.sendMessage(jid, { text: `🗺️ ${ev}\n\nHP: ${r.hp} | MP: ${r.mp} | Gold: ${r.gold}` });
+      if (r.mp < 15) { await reply(jid, '❌ MP kurang! Pakai .sembuh dulu.'); return; }
+      const dmg = Math.floor(Math.random() * 40) + 20;
+      r.mp -= 15; r.xp += 40; r.kills++;
+      if (r.xp >= r.lvl * 100) { r.xp = 0; r.lvl++; }
+      await reply(jid, `✨ Fireball!\n\nDMG : ${dmg} 🔥\nMP  : -15\n\nHP: ${r.hp}/100 | MP: ${r.mp}/80`);
     }
-    else if (cmd === "top") {
-      const sorted = Object.entries(rpgData).sort((a,b)=>b[1].lvl-a[1].lvl).slice(0,5);
-      let top = "🏆 *Leaderboard RPG*\n\n";
-      sorted.forEach(([id,d],i) => { top += `${i+1}. ${id.split("@")[0]} — Lvl ${d.lvl}\n`; });
-      await sock.sendMessage(jid, { text: top || "Belum ada data RPG!" });
+
+    else if (cmd === 'sembuh') {
+      const r = getRpg(jid);
+      const heal = Math.floor(Math.random() * 30) + 20;
+      r.hp = Math.min(100, r.hp + heal);
+      r.mp = Math.min(80, r.mp + 20);
+      await reply(jid, `💊 Sembuh!\n\n+${heal} HP | +20 MP\n\nHP: ${r.hp}/100 | MP: ${r.mp}/80`);
     }
-    else if (cmd === "jodoh") {
-      const names=["Sakura","Yuki","Rina","Hana","Mira","Ayu","Sari","Luna"];
-      await sock.sendMessage(jid, { text: `💘 Jodohmu: *${names[Math.floor(Math.random()*names.length)]}*!\nKecocokan: ${Math.floor(Math.random()*30)+70}% ❤️` });
+
+    else if (cmd === 'jelajah') {
+      const r = getRpg(jid);
+      const evs = [
+        { t: '🗺️ Harta karun! +50 Gold',  fn: () => { r.gold += 50; } },
+        { t: '👺 Bertemu Goblin! +30 XP',  fn: () => { r.xp += 30; } },
+        { t: '🌿 Istirahat di hutan +15 HP',fn: () => { r.hp = Math.min(100, r.hp + 15); } },
+        { t: '💎 Menemukan permata! +100 Gold', fn: () => { r.gold += 100; } },
+        { t: '☠️ Jebakan! -10 HP',          fn: () => { r.hp = Math.max(0, r.hp - 10); } },
+        { t: '🧙 Dapat ilmu baru +20 MP',   fn: () => { r.mp = Math.min(80, r.mp + 20); } },
+      ];
+      const ev = evs[Math.floor(Math.random() * evs.length)];
+      ev.fn();
+      await reply(jid, `🗺️ *Jelajah!*\n\n${ev.t}\n\nHP: ${r.hp} | MP: ${r.mp} | Gold: ${r.gold}`);
     }
-    else if (cmd === "rate") {
-      const r=Math.floor(Math.random()*30)+70;
-      await sock.sendMessage(jid, { text: `⭐ Rating: ${r}/100\n${"█".repeat(Math.round(r/10))}${"░".repeat(10-Math.round(r/10))}\n${r>=90?"😍 Keren banget!":"😊 Lumayan!"}` });
+
+    else if (cmd === 'top') {
+      const sorted = Object.entries(rpgData).sort((a, b) => b[1].lvl - a[1].lvl).slice(0, 5);
+      if (!sorted.length) { await reply(jid, 'Belum ada data RPG!'); return; }
+      let out = '🏆 *Leaderboard RPG*\n\n';
+      sorted.forEach(([id, d], i) => { out += `${i+1}. ${id.split('@')[0]} — Lvl ${d.lvl} | Gold ${d.gold}\n`; });
+      await reply(jid, out);
     }
-    else if (cmd === "ship") {
-      const c=Math.floor(Math.random()*100);
-      await sock.sendMessage(jid, { text: `💑 Kecocokan: ${c}%\n${c>=80?"❤️ Sangat cocok!":c>=50?"💛 Lumayan!":"💔 Kurang cocok..."}` });
+
+    // ── JODOH ─────────────────────────────────
+    else if (cmd === 'jodoh') {
+      const names = ['Sakura','Yuki','Rina','Hana','Mira','Ayu','Sari','Luna','Nana','Rei'];
+      const cocok = Math.floor(Math.random() * 30) + 70;
+      await reply(jid, `💘 Jodohmu: *${names[Math.floor(Math.random() * names.length)]}*!\nKecocokan: ${cocok}% ❤️\n\nSemoga langgeng~ (◕‿◕)`);
     }
-    else if (cmd === "info") {
-      await sock.sendMessage(jid, { text: `ℹ️ *Info Bot*\n\nNama: ${BOT_NAME}\nOwner: ${OWNER}\nPrefix: .\nVersi: 1.0.0\nStatus: Online ✅` });
+
+    else if (cmd === 'rate') {
+      const r = Math.floor(Math.random() * 30) + 70;
+      await reply(jid, `⭐ Rating kamu: *${r}/100*\n${'█'.repeat(Math.round(r/10))}${'░'.repeat(10-Math.round(r/10))}\n\n${r>=90?'😍 Kamu keren banget!':r>=80?'😊 Lumayan keren!':'🙂 Tetap semangat!'}`);
     }
-    else if (cmd === "owner") {
-      await sock.sendMessage(jid, { text: `👑 Owner: ${OWNER}` });
+
+    else if (cmd === 'ship') {
+      const c = Math.floor(Math.random() * 100);
+      await reply(jid, `💑 Kecocokan: *${c}%*\n\n${c>=80?'❤️ Sangat cocok!':c>=50?'💛 Lumayan cocok!':'💔 Kurang cocok...'}`);
     }
+
+    // ── INFO / OWNER ──────────────────────────
+    else if (cmd === 'info') {
+      await reply(jid, `ℹ️ *Info Bot*\n\nNama   : ${BOT_NAME}\nOwner  : ${OWNER}\nPrefix : .\nVersi  : 1.0.0\nStatus : Online ✅`);
+    }
+
+    else if (cmd === 'owner') {
+      await reply(jid, `👑 *Owner Bot*\n\nNama: ${OWNER}\nBot ini dibuat dan dikelola oleh ${OWNER}.`);
+    }
+
+    // ── DEFAULT ───────────────────────────────
     else {
-      await sock.sendMessage(jid, { text: `❓ Perintah tidak dikenal.\nKetik *${PREFIX}menu* untuk daftar.` });
+      await reply(jid, `❓ Perintah tidak dikenal.\nKetik *${PREFIX}menu* untuk daftar perintah.`);
     }
 
   } catch (err) {
-    console.error("[ERROR handleMessage]", err);
+    console.error('[ERROR handleMessage]', err);
   }
 }
 
-// ── Untuk test cmd dari web (tanpa kirim ke WA) ──
-async function handleCmdWeb(cmd, args = "") {
-  const r = getRpg("web");
-  if (cmd === "rpg") return `⚔️ Level: ${r.lvl} | HP: ${r.hp} | MP: ${r.mp} | XP: ${r.xp} | Gold: ${r.gold}`;
-  if (cmd === "ping") return `📡 Pong! Bot aktif. Uptime: ${Math.floor(process.uptime())}s`;
-  return `✓ Perintah .${cmd} diterima`;
-}
-
-// ── Start server ──────────────────────────────
+// ── Start Server ──────────────────────────────
 server.listen(PORT, () => {
   console.log(`\n╔═══════════════════════════════╗`);
-  console.log(`║   BOT WA ADNAN — Web Server   ║`);
-  console.log(`║   http://localhost:${PORT}        ║`);
+  console.log(`║   BOT WA ADNAN — v1.0.0      ║`);
+  console.log(`║   Port: ${PORT}                  ║`);
   console.log(`╚═══════════════════════════════╝\n`);
 });
