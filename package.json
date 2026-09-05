@@ -1,0 +1,17 @@
+{
+  "name": "bot-adnan-web",
+  "version": "1.0.0",
+  "description": "Bot WA Adnan — Web App",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "@whiskeysockets/baileys": "^6.7.16",
+    "pino": "^9.6.0",
+    "ws": "^8.18.0",
+    "express": "^4.18.0",
+    "qrcode": "^1.5.3"
+  },
+  "engines": { "node": ">=18" }
+}
