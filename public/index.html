@@ -1,0 +1,527 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Bot WA Adnan</title>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet"/>
+<style>
+/* ── TEMA ── */
+:root{
+  --bg:#0b0e14;--s1:#111622;--s2:#1a2035;--border:#1e2535;
+  --green:#3ddc84;--cyan:#5ce0f0;--yellow:#f5c842;--red:#ff5555;
+  --text:#cdd6f4;--muted:#6c7086;--accent:#3ddc84
+}
+[data-theme="white"]{
+  --bg:#f0f2f5;--s1:#ffffff;--s2:#f5f7fa;--border:#e0e4ed;
+  --green:#1a7a40;--cyan:#0a6e8a;--yellow:#b8860b;--red:#cc2222;
+  --text:#1a1f2e;--muted:#6c7086;--accent:#1a7a40
+}
+*{box-sizing:border-box;margin:0;padding:0;transition:background .3s,color .3s,border-color .3s}
+body{min-height:100vh;background:var(--bg);color:var(--text);font-family:'Inter',sans-serif;display:flex;flex-direction:column;align-items:center}
+
+/* ── TOPBAR ── */
+.topbar{width:100%;background:var(--accent);padding:11px 18px;display:flex;align-items:center;gap:10px;position:sticky;top:0;z-index:99}
+.topbar-icon{font-size:22px}
+.topbar-info{flex:1}
+.topbar-title{font-size:15px;font-weight:700;color:#fff}
+.topbar-sub{font-size:10px;color:rgba(255,255,255,.8)}
+.topbar-right{display:flex;align-items:center;gap:8px}
+.ws-badge{background:rgba(255,255,255,.2);border-radius:20px;padding:3px 10px;font-size:11px;color:#fff;display:flex;align-items:center;gap:4px}
+.wsdot{width:6px;height:6px;border-radius:50%;background:#fff}
+.wsdot.on{animation:pulse 2s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+.theme-btn{background:rgba(255,255,255,.2);border:none;border-radius:50%;width:32px;height:32px;cursor:pointer;font-size:16px;display:flex;align-items:center;justify-content:center}
+
+.wrap{width:100%;max-width:430px;padding:0 0 24px}
+
+/* ── HERO / BANNER ── */
+.hero{width:100%;background:linear-gradient(180deg,#0a0c12 0%,var(--bg) 100%);position:relative;overflow:hidden;display:flex;flex-direction:column;align-items:center;padding-bottom:20px}
+[data-theme="white"] .hero{background:linear-gradient(180deg,#1a1f2e 0%,var(--bg) 100%)}
+.hero-img{width:180px;height:180px;object-fit:cover;margin-top:16px;filter:drop-shadow(0 0 24px rgba(61,220,132,.4));border-radius:50%;border:2px solid rgba(61,220,132,.3)}
+[data-theme="white"] .hero-img{filter:drop-shadow(0 0 24px rgba(26,122,64,.4));border-color:rgba(26,122,64,.3)}
+.hero-name{font-size:20px;font-weight:700;color:#fff;margin-top:12px;text-shadow:0 0 20px rgba(61,220,132,.5)}
+.hero-sub{font-size:12px;color:rgba(255,255,255,.6);margin-top:4px}
+.hero-badge{display:flex;gap:8px;margin-top:12px;flex-wrap:wrap;justify-content:center}
+.badge{background:rgba(61,220,132,.15);border:1px solid rgba(61,220,132,.3);border-radius:20px;padding:4px 12px;font-size:11px;color:var(--green);font-weight:600}
+
+/* ── CARDS ── */
+.pad{padding:0 14px}
+.card{background:var(--s1);border:1px solid var(--border);border-radius:16px;padding:20px;margin-bottom:12px}
+.card-title{font-size:14px;font-weight:700;color:var(--text);margin-bottom:14px;display:flex;align-items:center;gap:7px}
+
+/* ── STATS ── */
+.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin:0 14px 12px}
+.stat{background:var(--s1);border:1px solid var(--border);border-radius:10px;padding:10px;text-align:center}
+.stat-val{font-size:18px;font-weight:700;color:var(--accent)}
+.stat-lbl{font-size:10px;color:var(--muted);margin-top:2px}
+
+/* ── TAUTKAN ── */
+.label{font-size:11px;color:var(--muted);letter-spacing:1px;text-transform:uppercase;margin-bottom:8px}
+.iw{position:relative;margin-bottom:12px}
+.prefix{position:absolute;left:14px;top:50%;transform:translateY(-50%);font-family:'JetBrains Mono',monospace;font-size:14px;color:var(--accent);font-weight:700}
+.ni{width:100%;background:var(--s2);border:1.5px solid var(--border);border-radius:12px;padding:14px 16px 14px 58px;color:var(--text);font-family:'JetBrains Mono',monospace;font-size:15px;outline:none;transition:border-color .2s;letter-spacing:1px}
+.ni:focus{border-color:var(--accent)}
+.ni::placeholder{color:var(--muted);font-size:13px;letter-spacing:0}
+.ni.err-inp{border-color:var(--red)}
+.err-txt{color:var(--red);font-size:12px;margin-bottom:10px;display:none}
+.err-txt.show{display:block}
+
+.btn{width:100%;padding:14px;border:none;border-radius:12px;font-size:14px;font-weight:700;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:8px;letter-spacing:.3px;transition:opacity .15s,transform .1s}
+.btn:active{transform:scale(.98)}
+.btn:disabled{opacity:.4;cursor:not-allowed}
+.btn-main{background:linear-gradient(135deg,#1f8c50,var(--green));color:#0a0f0a}
+[data-theme="white"] .btn-main{background:linear-gradient(135deg,#1a7a40,#25a85e);color:#fff}
+.btn-copy{background:var(--accent);color:#0a0f0a;margin-top:12px}
+[data-theme="white"] .btn-copy{color:#fff}
+.btn-reset{background:transparent;border:1px solid var(--border);color:var(--muted);margin-top:8px;padding:11px}
+.btn-reset:hover{border-color:var(--red);color:var(--red)}
+
+.progress{height:3px;background:var(--border);border-radius:2px;overflow:hidden;margin-top:12px;display:none}
+.progress.show{display:block}
+.pfill{height:100%;background:linear-gradient(90deg,var(--green),var(--cyan));border-radius:2px;width:0%;transition:width .4s}
+
+.log{background:var(--s2);border:1px solid var(--border);border-left:3px solid var(--accent);border-radius:10px;padding:12px 14px;font-family:'JetBrains Mono',monospace;font-size:11px;line-height:1.9;margin-top:12px;display:none;max-height:110px;overflow-y:auto}
+.log.show{display:block}
+.lg{color:var(--muted)}.s{color:var(--green)}.i{color:var(--cyan)}.w{color:var(--yellow)}.e{color:var(--red)}
+
+/* ── KODE CARD ── */
+.code-wrap{background:linear-gradient(135deg,#0b1f0e,#081508);border:1.5px solid var(--green);border-radius:14px;padding:20px;text-align:center;margin-top:14px;display:none;animation:up .3s ease}
+[data-theme="white"] .code-wrap{background:linear-gradient(135deg,#e8f5ec,#d4edda);border-color:var(--green)}
+.code-wrap.show{display:block}
+@keyframes up{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+.code-lbl{font-size:10px;color:var(--green);letter-spacing:2px;text-transform:uppercase;margin-bottom:10px}
+.code-num{font-family:'JetBrains Mono',monospace;font-size:32px;font-weight:700;color:#fff;letter-spacing:10px;text-shadow:0 0 20px var(--green);padding:12px 8px;background:rgba(61,220,132,.07);border-radius:10px;border:1px solid rgba(61,220,132,.18);cursor:pointer;user-select:all;transition:background .2s}
+[data-theme="white"] .code-num{color:var(--text);text-shadow:none;background:rgba(26,122,64,.08);border-color:rgba(26,122,64,.2)}
+.code-num:hover{background:rgba(61,220,132,.15)}
+.cd{font-size:12px;color:var(--yellow);font-family:'JetBrains Mono',monospace;margin-top:8px}
+.steps{text-align:left;font-size:12px;color:var(--muted);line-height:2.2;border-top:1px solid rgba(61,220,132,.15);padding-top:12px;margin-top:12px}
+.steps b{color:var(--text)}.steps .n{color:var(--green);font-weight:700}
+
+.conn-card{background:linear-gradient(135deg,#0b1f0e,#081508);border:1.5px solid var(--green);border-radius:14px;padding:22px;text-align:center;margin-top:14px;display:none;animation:up .3s ease}
+[data-theme="white"] .conn-card{background:linear-gradient(135deg,#e8f5ec,#d4edda);border-color:var(--green)}
+.conn-card.show{display:block}
+.conn-icon{font-size:40px;margin-bottom:8px}
+.conn-title{font-size:17px;font-weight:700;color:var(--green)}
+.conn-sub{font-size:12px;color:var(--muted);margin-top:4px}
+.conn-nom{font-family:'JetBrains Mono',monospace;font-size:13px;color:var(--text);background:rgba(61,220,132,.1);border-radius:8px;padding:5px 14px;display:inline-block;margin-top:10px}
+
+/* ── FITUR GRID ── */
+.fitur-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.fi{background:var(--s2);border:1px solid var(--border);border-radius:12px;padding:12px;transition:transform .15s,border-color .2s;cursor:pointer}
+.fi:hover{transform:translateY(-2px);border-color:var(--accent)}
+.fi-icon{font-size:22px;margin-bottom:6px}
+.fi-name{font-size:13px;color:var(--text);font-weight:600}
+.fi-cmd{font-size:11px;color:var(--muted);font-family:'JetBrains Mono',monospace;margin-top:3px}
+
+/* ── ACTIVITY ── */
+.act-list{max-height:120px;overflow-y:auto;font-family:'JetBrains Mono',monospace;font-size:11px}
+.act-list::-webkit-scrollbar{width:3px}
+.act-list::-webkit-scrollbar-thumb{background:var(--border);border-radius:2px}
+.act-item{padding:4px 0;border-bottom:1px solid var(--border);display:flex;gap:8px;align-items:center}
+.act-time{color:var(--muted);min-width:50px;font-size:10px}
+.act-cmd{color:var(--accent)}
+.act-jid{color:var(--muted);font-size:10px}
+
+/* ── SETTING PANEL ── */
+.setting-panel{background:var(--s1);border:1px solid var(--border);border-radius:16px;padding:20px;margin-bottom:12px}
+.setting-row{display:flex;align-items:center;justify-content:space-between;padding:10px 0;border-bottom:1px solid var(--border)}
+.setting-row:last-child{border-bottom:none}
+.setting-label{font-size:13px;color:var(--text);font-weight:500}
+.setting-sub{font-size:11px;color:var(--muted);margin-top:2px}
+.toggle{width:44px;height:24px;background:var(--border);border-radius:12px;cursor:pointer;position:relative;transition:background .2s;flex:none;border:none}
+.toggle.on{background:var(--accent)}
+.toggle::after{content:'';position:absolute;width:18px;height:18px;background:#fff;border-radius:50%;top:3px;left:3px;transition:left .2s;box-shadow:0 1px 3px rgba(0,0,0,.3)}
+.toggle.on::after{left:23px}
+
+/* ── NAV TABS ── */
+.nav-tabs{display:flex;background:var(--s1);border-bottom:1px solid var(--border);position:sticky;top:46px;z-index:98;width:100%}
+.nav-tab{flex:1;padding:11px 8px;font-size:12px;color:var(--muted);border:none;background:none;cursor:pointer;border-bottom:2px solid transparent;transition:color .15s;white-space:nowrap}
+.nav-tab.active{color:var(--accent);border-bottom-color:var(--accent)}
+
+/* ── TAB CONTENT ── */
+.tab-content{display:none}
+.tab-content.active{display:block}
+
+.footer{text-align:center;font-size:11px;color:var(--muted);padding:16px;line-height:1.8}
+</style>
+</head>
+<body data-theme="dark">
+
+<!-- Topbar -->
+<div class="topbar">
+  <div class="topbar-icon">🤖</div>
+  <div class="topbar-info">
+    <div class="topbar-title">Bot WA Adnan</div>
+    <div class="topbar-sub">Panel tautkan & monitor</div>
+  </div>
+  <div class="topbar-right">
+    <div class="ws-badge"><div class="wsdot" id="wsDot"></div><span id="wsStatus">Offline</span></div>
+    <button class="theme-btn" onclick="toggleTheme()" id="themeBtn">🌙</button>
+  </div>
+</div>
+
+<!-- Nav tabs -->
+<div class="nav-tabs" style="max-width:430px;width:100%">
+  <button class="nav-tab active" onclick="showTab('tautkan')">🔗 Tautkan</button>
+  <button class="nav-tab" onclick="showTab('fitur')">✨ Fitur</button>
+  <button class="nav-tab" onclick="showTab('aktivitas')">📊 Aktivitas</button>
+  <button class="nav-tab" onclick="showTab('setting')">⚙️ Setting</button>
+</div>
+
+<div class="wrap">
+
+  <!-- HERO -->
+  <div class="hero">
+    <img class="hero-img" src="https://i.imgur.com/placeholder.png" id="heroImg"
+      onerror="this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 180 180%22><circle cx=%2290%22 cy=%2290%22 r=%2290%22 fill=%22%23111622%22/><text x=%2290%22 y=%22110%22 font-size=%2280%22 text-anchor=%22middle%22>🤖</text></svg>'"
+      alt="Bot Avatar"/>
+    <div class="hero-name">Bot WA Adnan</div>
+    <div class="hero-sub">Multi-fitur · by Adnan</div>
+    <div class="hero-badge">
+      <span class="badge">v1.0.0</span>
+      <span class="badge" id="botBadge">● Standby</span>
+      <span class="badge">1000+ CMD</span>
+    </div>
+  </div>
+
+  <!-- Stats -->
+  <div class="stats">
+    <div class="stat"><div class="stat-val">1K+</div><div class="stat-lbl">Perintah</div></div>
+    <div class="stat"><div class="stat-val" id="upStat">0m</div><div class="stat-lbl">Uptime</div></div>
+    <div class="stat"><div class="stat-val" id="actStat">0</div><div class="stat-lbl">Aktivitas</div></div>
+  </div>
+
+  <!-- TAB: TAUTKAN -->
+  <div class="tab-content active pad" id="tab-tautkan">
+    <div class="card">
+      <div class="card-title">🔗 Tautkan ke WhatsApp</div>
+      <div class="label">Nomor WhatsApp</div>
+      <div class="iw">
+        <span class="prefix">+62</span>
+        <input class="ni" id="nomInput" type="tel" placeholder="8xxxxxxxxxx" inputmode="numeric" maxlength="13"/>
+      </div>
+      <div class="err-txt" id="errTxt">⚠ Masukkan nomor valid (min. 9 digit)</div>
+      <button class="btn btn-main" id="btnGet" onclick="mulai()">🔗 Generate Kode Tautan</button>
+      <div class="progress" id="prog"><div class="pfill" id="pfill"></div></div>
+      <div class="log" id="logBox"></div>
+
+      <div class="code-wrap" id="codeWrap">
+        <div class="code-lbl">🔗 Kode Tautan WhatsApp</div>
+        <div class="code-num" id="codeNum" title="Klik untuk salin">----</div>
+        <div class="cd" id="cd">⏳ 60 detik</div>
+        <button class="btn btn-copy" onclick="salin()">📋 Salin Kode — Paste ke WA</button>
+        <div class="steps">
+          <span class="n">1.</span> Buka <b>WhatsApp</b> di HP<br>
+          <span class="n">2.</span> Ketuk ⋮ → <b>Perangkat Tertaut</b><br>
+          <span class="n">3.</span> Ketuk <b>"Tautkan Perangkat"</b><br>
+          <span class="n">4.</span> Pilih <b>"Tautkan dengan nomor telepon"</b><br>
+          <span class="n">5.</span> Paste kode → <b>Bot aktif! ✅</b>
+        </div>
+      </div>
+
+      <div class="conn-card" id="connCard">
+        <div class="conn-icon">✅</div>
+        <div class="conn-title">Bot Terhubung!</div>
+        <div class="conn-sub">Bot siap menerima perintah di WA</div>
+        <div class="conn-nom" id="connNom">+62xxx</div>
+        <button class="btn btn-reset" onclick="resetAll()">🔄 Tautkan Nomor Lain</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- TAB: FITUR -->
+  <div class="tab-content pad" id="tab-fitur">
+    <div class="card">
+      <div class="card-title">✨ Semua Fitur Bot</div>
+      <div class="fitur-grid">
+        <div class="fi"><div class="fi-icon">🖼️</div><div class="fi-name">Brat Sticker</div><div class="fi-cmd">.brat [teks]</div></div>
+        <div class="fi"><div class="fi-icon">🌑</div><div class="fi-name">Kuro Slash</div><div class="fi-cmd">.kuro</div></div>
+        <div class="fi"><div class="fi-icon">⚔️</div><div class="fi-name">RPG System</div><div class="fi-cmd">.rpg</div></div>
+        <div class="fi"><div class="fi-icon">🎮</div><div class="fi-name">Mini Games</div><div class="fi-cmd">.menugame</div></div>
+        <div class="fi"><div class="fi-icon">📡</div><div class="fi-name">Server Live</div><div class="fi-cmd">.ping</div></div>
+        <div class="fi"><div class="fi-icon">💘</div><div class="fi-name">Jodoh</div><div class="fi-cmd">.menujodoh</div></div>
+        <div class="fi"><div class="fi-icon">🎵</div><div class="fi-name">TikTok</div><div class="fi-cmd">.menutiktok</div></div>
+        <div class="fi"><div class="fi-icon">⬇️</div><div class="fi-name">Downloader</div><div class="fi-cmd">.menudownloder</div></div>
+        <div class="fi"><div class="fi-icon">▶️</div><div class="fi-name">YouTube</div><div class="fi-cmd">.menuyoutube</div></div>
+        <div class="fi"><div class="fi-icon">👥</div><div class="fi-name">Grup</div><div class="fi-cmd">.menugrup</div></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- TAB: AKTIVITAS -->
+  <div class="tab-content pad" id="tab-aktivitas">
+    <div class="card">
+      <div class="card-title">📊 Aktivitas Bot Realtime</div>
+      <div class="act-list" id="actList">
+        <div style="color:var(--muted);padding:8px 0;font-size:12px">Belum ada aktivitas...</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- TAB: SETTING -->
+  <div class="tab-content pad" id="tab-setting">
+    <div class="card">
+      <div class="card-title">⚙️ Pengaturan</div>
+
+      <!-- Ganti foto -->
+      <div style="margin-bottom:16px">
+        <div class="label">Foto Bot (URL gambar)</div>
+        <div style="display:flex;gap:8px">
+          <input id="imgUrl" style="flex:1;background:var(--s2);border:1.5px solid var(--border);border-radius:10px;padding:10px 12px;color:var(--text);font-size:13px;outline:none" placeholder="https://..." oninput="previewImg()"/>
+          <button onclick="gantiImg()" style="background:var(--accent);border:none;border-radius:10px;padding:10px 16px;color:#0a0f0a;font-weight:700;cursor:pointer;font-size:13px">Set</button>
+        </div>
+        <div style="font-size:11px;color:var(--muted);margin-top:6px">Default: emoji robot 🤖. Paste URL gambar Gojo atau karakter lain.</div>
+      </div>
+
+      <div class="setting-panel" style="padding:0;border:none">
+        <div class="setting-row">
+          <div>
+            <div class="setting-label">🌙 Tema Gelap</div>
+            <div class="setting-sub">Toggle tema hitam / putih</div>
+          </div>
+          <button class="toggle on" id="themeToggle" onclick="toggleTheme()"></button>
+        </div>
+        <div class="setting-row">
+          <div>
+            <div class="setting-label">🔔 Notif Aktivitas</div>
+            <div class="setting-sub">Tampilkan log pesan masuk</div>
+          </div>
+          <button class="toggle on" id="notifToggle" onclick="toggleBtn('notifToggle')"></button>
+        </div>
+        <div class="setting-row">
+          <div>
+            <div class="setting-label">📡 WebSocket Auto-reconnect</div>
+            <div class="setting-sub">Sambung ulang otomatis jika putus</div>
+          </div>
+          <button class="toggle on" id="wsToggle" onclick="toggleBtn('wsToggle')"></button>
+        </div>
+      </div>
+
+      <div style="margin-top:14px;background:var(--s2);border-radius:10px;padding:12px;font-size:12px;color:var(--muted);line-height:1.8">
+        <b style="color:var(--text)">ℹ️ Info:</b><br>
+        Web ini perlu <code>server.js</code> jalan di backend.<br>
+        Jalankan: <code>node server.js</code> lalu buka web ini.<br>
+        Atau deploy ke Railway/Render untuk akses online.
+      </div>
+    </div>
+  </div>
+
+  <div class="footer">Bot WA Adnan v1.0.0 · dibuat dengan ❤️ oleh <b>Adnan</b></div>
+</div>
+
+<script>
+// ── WebSocket — konek ke server.js ────────────
+let ws, phase='idle', timer=null, code='', actCount=0;
+const startT = Date.now();
+let autoReconnect = true;
+
+function connectWS(){
+  // Kalau dibuka sebagai file (bukan dari server), skip WS
+  if(location.protocol === 'file:' || !location.host){
+    setWS(false, 'File Mode');
+    addLog('⚠ Buka dari server.js bukan file langsung','w');
+    addLog('Jalankan: node server.js → buka localhost:3000','i');
+    return;
+  }
+  try {
+    const proto = location.protocol==='https:'?'wss':'ws';
+    ws = new WebSocket(`${proto}://${location.host}`);
+    ws.onopen = () => { setWS(true,'Terhubung'); addLog('✓ Terhubung ke server bot','s'); };
+    ws.onmessage = (e) => {
+      const d = JSON.parse(e.data);
+      if(d.type==='log') addLog(d.msg, d.cls||'');
+      if(d.type==='progress') setProg(d.val);
+      if(d.type==='code'){ showCode(d.code); }
+      if(d.type==='connected'){ showConnected(d.nomor); }
+      if(d.type==='disconnected'){ setBotStatus(false); }
+      if(d.type==='status' && d.botReady){ setBotStatus(true); }
+      if(d.type==='activity'){ addActivity(d.jid, d.cmd); }
+      if(d.type==='error'){ addLog('❌ '+d.msg,'e'); resetBtn(); }
+    };
+    ws.onclose = () => {
+      setWS(false,'Offline');
+      if(autoReconnect) setTimeout(connectWS, 3000);
+    };
+    ws.onerror = () => setWS(false,'Error');
+  } catch(e) {
+    setWS(false,'Error');
+  }
+}
+
+function setWS(on, txt){
+  document.getElementById('wsDot').className='wsdot '+(on?'on':'off');
+  document.getElementById('wsStatus').textContent=txt||(on?'Online':'Offline');
+}
+
+function setBotStatus(on){
+  document.getElementById('botBadge').textContent = on ? '● Online' : '● Standby';
+}
+
+// ── Mulai tautkan ─────────────────────────────
+function mulai(){
+  if(phase!=='idle') return;
+  const raw = document.getElementById('nomInput').value.replace(/\D/g,'');
+  if(!raw||raw.length<9){
+    document.getElementById('errTxt').classList.add('show');
+    document.getElementById('nomInput').classList.add('err-inp');
+    setTimeout(()=>{document.getElementById('errTxt').classList.remove('show');document.getElementById('nomInput').classList.remove('err-inp');},2500);
+    return;
+  }
+  phase='loading';
+  document.getElementById('btnGet').disabled=true;
+  document.getElementById('btnGet').innerHTML='⏳ Memproses...';
+  document.getElementById('logBox').innerHTML='';
+  document.getElementById('prog').classList.add('show');
+
+  const nom='62'+(raw.startsWith('0')?raw.slice(1):raw.startsWith('62')?raw.slice(2):raw);
+
+  if(ws && ws.readyState===1){
+    ws.send(JSON.stringify({type:'requestCode', nomor:nom}));
+    addLog('→ Menghubungi server bot...','i');
+    setProg(10);
+  } else {
+    // File mode — simulasi
+    addLog('→ Mode simulasi (server.js belum jalan)','w');
+    setProg(20);
+    simulasiKode(nom);
+  }
+}
+
+async function simulasiKode(nom){
+  const steps = [
+    [400,'→ Inisialisasi Baileys...','i'],
+    [500,'✓ Modul loaded','s'],
+    [600,'→ Koneksi ke WA...','i'],
+    [700,'✓ WebSocket OPEN','s'],
+    [500,'→ Request pairing code...','i'],
+    [900,'✓ Kode berhasil didapat!','s'],
+  ];
+  let p=20;
+  for(const [delay,msg,cls] of steps){
+    await sleep(delay); addLog(msg,cls); p+=13; setProg(Math.min(p,100));
+  }
+  const c=genCode();
+  showCode(c);
+}
+
+function showCode(c){
+  code=c;
+  document.getElementById('codeNum').textContent=code;
+  document.getElementById('codeWrap').classList.add('show');
+  document.getElementById('btnGet').innerHTML='✅ Kode Siap';
+  phase='code';
+  let sisa=60;
+  timer=setInterval(()=>{
+    sisa--;
+    document.getElementById('cd').textContent='⏳ '+sisa+' detik';
+    if(sisa<=0){clearInterval(timer);document.getElementById('cd').textContent='⚠ Kedaluwarsa!';document.getElementById('cd').style.color='var(--red)';resetBtn();phase='idle';}
+  },1000);
+}
+
+function showConnected(nom){
+  clearInterval(timer);
+  document.getElementById('codeWrap').classList.remove('show');
+  document.getElementById('connCard').classList.add('show');
+  document.getElementById('connNom').textContent=nom||'+62xxx';
+  setBotStatus(true);
+  phase='connected';
+}
+
+function salin(){
+  const fn=()=>{const b=document.querySelectorAll('.btn-copy')[0];if(b){b.innerHTML='✅ Tersalin!';setTimeout(()=>b.innerHTML='📋 Salin Kode — Paste ke WA',2500);}};
+  if(navigator.clipboard) navigator.clipboard.writeText(code).then(fn).catch(()=>{fc();fn();});
+  else{fc();fn();}
+}
+function fc(){const e=document.createElement('textarea');e.value=code;document.body.appendChild(e);e.select();document.execCommand('copy');document.body.removeChild(e);}
+document.getElementById('codeNum').onclick=salin;
+
+function resetBtn(){
+  document.getElementById('btnGet').disabled=false;
+  document.getElementById('btnGet').innerHTML='🔗 Generate Kode Tautan';
+  phase='idle';
+}
+function resetAll(){
+  clearInterval(timer); phase='idle'; code='';
+  document.getElementById('codeWrap').classList.remove('show');
+  document.getElementById('connCard').classList.remove('show');
+  document.getElementById('logBox').innerHTML='';
+  document.getElementById('logBox').classList.remove('show');
+  document.getElementById('pfill').style.width='0%';
+  document.getElementById('prog').classList.remove('show');
+  document.getElementById('nomInput').value='';
+  resetBtn();
+  document.getElementById('cd').style.color='var(--yellow)';
+}
+
+// ── Utils ─────────────────────────────────────
+function sleep(ms){return new Promise(r=>setTimeout(r,ms));}
+function genCode(){const c='ABCDEFGHJKLMNPQRSTUVWXYZ23456789';const r=()=>Array.from({length:4},()=>c[Math.floor(Math.random()*c.length)]).join('');return r()+'-'+r();}
+function setProg(v){document.getElementById('pfill').style.width=v+'%';}
+function addLog(t,c=''){
+  const b=document.getElementById('logBox');b.classList.add('show');
+  const d=document.createElement('div');d.className='lg '+(c==='s'?'s':c==='i'?'i':c==='w'?'w':c==='e'?'e':'');
+  d.textContent=t;b.appendChild(d);b.scrollTop=b.scrollHeight;
+}
+function addActivity(jid,cmd){
+  actCount++;document.getElementById('actStat').textContent=actCount;
+  const list=document.getElementById('actList');
+  if(list.querySelector('[style]')) list.innerHTML='';
+  const ts=new Date().toLocaleTimeString('id-ID',{hour:'2-digit',minute:'2-digit',second:'2-digit'});
+  const el=document.createElement('div');el.className='act-item';
+  el.innerHTML=`<span class="act-time">${ts}</span><span class="act-cmd">${cmd}</span><span class="act-jid">${jid.split('@')[0]}</span>`;
+  list.insertBefore(el,list.firstChild);
+  if(list.children.length>30) list.removeChild(list.lastChild);
+}
+
+// ── Tab ───────────────────────────────────────
+function showTab(t){
+  document.querySelectorAll('.tab-content').forEach(c=>c.classList.remove('active'));
+  document.querySelectorAll('.nav-tab').forEach(b=>b.classList.remove('active'));
+  document.getElementById('tab-'+t).classList.add('active');
+  const tabs=['tautkan','fitur','aktivitas','setting'];
+  document.querySelectorAll('.nav-tab')[tabs.indexOf(t)].classList.add('active');
+}
+
+// ── Tema ──────────────────────────────────────
+let isDark=true;
+function toggleTheme(){
+  isDark=!isDark;
+  document.body.setAttribute('data-theme',isDark?'dark':'white');
+  document.getElementById('themeBtn').textContent=isDark?'🌙':'☀️';
+  const tg=document.getElementById('themeToggle');
+  tg.className='toggle '+(isDark?'on':'');
+}
+function toggleBtn(id){
+  const el=document.getElementById(id);
+  el.className='toggle '+(el.classList.contains('on')?'':'on');
+}
+
+// ── Ganti foto ────────────────────────────────
+function previewImg(){
+  const url=document.getElementById('imgUrl').value;
+  if(url) document.getElementById('heroImg').src=url;
+}
+function gantiImg(){
+  const url=document.getElementById('imgUrl').value;
+  if(url){document.getElementById('heroImg').src=url;localStorage.setItem('botImg',url);}
+}
+
+// ── Load saved settings ───────────────────────
+const savedImg=localStorage.getItem('botImg');
+if(savedImg) document.getElementById('heroImg').src=savedImg;
+
+// ── Uptime ────────────────────────────────────
+setInterval(()=>{
+  const s=Math.floor((Date.now()-startT)/1000);
+  const h=Math.floor(s/3600),m=Math.floor((s%3600)/60);
+  document.getElementById('upStat').textContent=h>0?h+'j':m+'m '+s%60+'s';
+},1000);
+
+document.getElementById('nomInput').addEventListener('keydown',e=>{if(e.key==='Enter')mulai();});
+document.getElementById('nomInput').addEventListener('input',e=>{e.target.value=e.target.value.replace(/\D/g,'');});
+
+connectWS();
+</script>
+</body>
+</html>
