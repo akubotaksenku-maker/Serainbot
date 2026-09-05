@@ -1,3 +1,4 @@
+const { randomBytes } = require("crypto");
 const express   = require("express");
 const { WebSocketServer } = require("ws");
 const http      = require("http");
@@ -5,6 +6,11 @@ const path      = require("path");
 const fs        = require("fs");
 const os        = require("os");
 const readline  = require("readline");
+// UUID generator tanpa import randomUUID
+function randomUUID() {
+  return randomBytes(16).toString("hex").replace(/(.{8})(.{4})(.{4})(.{4})(.{12})/, "$1-$2-$3-$4-$5");
+}
+
 const {
   default: makeWASocket,
   useMultiFileAuthState,
