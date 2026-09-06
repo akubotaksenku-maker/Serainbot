@@ -1,25 +1,43 @@
 'use strict';
 
-// ── Fix crypto ──
+// ── Fix crypto (WAJIB sebelum require baileys!) ──
 const crypto = require('crypto');
+
+// Patch global.crypto agar Baileys jalan di semua versi Node
 if (!global.crypto) {
-  global.crypto = crypto.webcrypto ?? {
-    randomUUID: () => {
-      const b = crypto.randomBytes(16);
-      b[6] = (b[6] & 0x0f) | 0x40;
-      b[8] = (b[8] & 0x3f) | 0x80;
-      return [
-        b.slice(0,4), b.slice(4,6), b.slice(6,8),
-        b.slice(8,10), b.slice(10,16)
-      ].map(x => x.toString('hex')).join('-');
-    },
+  global.crypto = crypto.webcrypto || {
+    // Fallback manual kalau webcrypto belum ada (Node < 19)
+    randomUUID: () => crypto.randomUUID(),
     getRandomValues: (arr) => {
-      const bytes = crypto.randomBytes(arr.length);
-      arr.set(bytes);
+      const bytes = crypto.randomBytes(arr.byteLength);
+      const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+      new Uint8Array(arr.buffer).set(bytes);
       return arr;
-    }
+    },
+    subtle: {
+      digest: async (alg, data) => {
+        const algoMap = {
+          'SHA-1': 'sha1',
+          'SHA-256': 'sha256',
+          'SHA-384': 'sha384',
+          'SHA-512': 'sha512'
+        };
+        const hash = crypto.createHash(algoMap[alg] || String(alg).toLowerCase().replace('-', ''));
+        hash.update(Buffer.isBuffer(data) ? data : Buffer.from(data));
+        return hash.digest().buffer;
+      }
+    },
+    randomBytes: (n) => crypto.randomBytes(n)
   };
 }
+
+// Backup: pastikan global.crypto.subtle selalu ada
+if (global.crypto && !global.crypto.subtle && crypto.webcrypto) {
+  global.crypto.subtle = crypto.webcrypto.subtle;
+}
+
+// Tambahan: beberapa env butuh globalThis.crypto juga
+if (!globalThis.crypto) globalThis.crypto = global.crypto;
 
 const express  = require('express');
 const http     = require('http');
